@@ -609,8 +609,19 @@ function renderCards(container, events) {
 // ====================== 构建单张卡片 ======================
 // ====================== 中场休息检测 ======================
 function isHalftime(ev) {
+  // 方法1：ESPN 直接标注 Halftime（mock 模式用）
   const detail = (ev?.status?.type?.detail || '').toLowerCase();
-  return detail.includes('half') || detail.includes('中场');
+  if (detail.includes('half') || detail.includes('ht') || detail.includes('中场') || detail.includes('休息')) return true;
+
+  // 方法2：状态为 in + 上半场 + 时钟 ≥ 45:00（真实 API 中场不显式标注）
+  if (ev?.status?.type?.state === 'in' && ev?.status?.period === 1) {
+    const clock = (ev?.status?.displayClock || '').trim();
+    // 匹配 "45:00" "45:00+4" "45'+4'" "46:12" 等
+    const m = clock.match(/^(\d+)/);
+    if (m && parseInt(m[1]) >= 45) return true;
+  }
+
+  return false;
 }
 
 function buildCard(ev) {
