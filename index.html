@@ -552,6 +552,21 @@ async function loadMatches() {
       }
     }
 
+    // ===== 测试模式：?mock=halftime 模拟中场休息 =====
+    if (window.location.search.includes('mock=halftime') && events.length > 0) {
+      const mock = events[0];
+      mock.status = {
+        type: { state: 'in', completed: false, detail: 'Halftime' },
+        period: 1,
+        displayClock: '45:00+4'
+      };
+      const comp = mock.competitions?.[0];
+      if (comp?.competitors?.length >= 2) {
+        comp.competitors[0].score = '1';
+        comp.competitors[1].score = '0';
+      }
+    }
+
     if (!events.length) {
       container.innerHTML = `
         <div class="state-box">
@@ -592,14 +607,24 @@ function renderCards(container, events) {
 }
 
 // ====================== 构建单张卡片 ======================
+// ====================== 中场休息检测 ======================
+function isHalftime(ev) {
+  const detail = (ev?.status?.type?.detail || '').toLowerCase();
+  return detail.includes('half') || detail.includes('中场');
+}
+
 function buildCard(ev) {
   const comp = ev.competitions?.[0] || {};
   const [home, away] = splitTeams(comp.competitors || []);
   const status = ev.status?.type;
   const state = status?.state;
+  const halftime = isHalftime(ev);
 
   let badge = '';
-  if (state === 'in') {
+  if (halftime) {
+    const scoreStr = `${home?.score ?? '-'} - ${away?.score ?? '-'}`;
+    badge = `<span class="badge badge-live">⏸️ 中场休息 ${scoreStr}</span>`;
+  } else if (state === 'in') {
     const half = ev.status?.period === 1 ? '上半场' : ev.status?.period === 2 ? '下半场' : ev.status?.period > 2 ? '加时赛' : '';
     const clock = ev.status?.displayClock || '';
     badge = `<span class="badge badge-live"><span class="dot"></span>🔴 进行中 ${half} ${clock}</span>`;
@@ -610,7 +635,7 @@ function buildCard(ev) {
     badge = `<span class="badge badge-upcoming">🕐 ${t} 开始</span>`;
   }
 
-  const scoreClass = state === 'in' ? 'score-num live-score' : 'score-num';
+  const scoreClass = (state === 'in' || halftime) ? 'score-num live-score' : 'score-num';
   const hs = home?.score ?? '-';
   const as = away?.score ?? '-';
 
@@ -688,7 +713,7 @@ async function expandCard(evId, ev) {
     let data = await apiFetch(url);
 
     // ===== 测试模式：mock 详情数据 =====
-    if (window.location.search.includes('mock=live')) {
+    if (window.location.search.includes('mock=live') || window.location.search.includes('mock=halftime')) {
       data = mockDetailData(data, ev);
     }
 
@@ -889,7 +914,8 @@ function renderDetails(container, data, ev) {
   container.innerHTML = html;
 
   // 异步触发 DeepSeek AI 分析
-  callDeepSeekAI(aiId, { homeName, awayName, hs, as, state, period: ev?.status?.period, clock: ev?.status?.displayClock });
+  const halftime = isHalftime(ev);
+  callDeepSeekAI(aiId, { homeName, awayName, hs, as, state: halftime ? 'halftime' : state, period: ev?.status?.period, clock: ev?.status?.displayClock });
 }
 
 // ====================== 提取统计数据 ======================
@@ -1015,7 +1041,14 @@ function genSummary(hName, aName, hs, as, stats, events, state, forms, ev) {
   const paras = [];
 
   // ── 段落一：比赛结果/当前状态 ──
-  if (state === 'in') {
+  const halftime = isHalftime(ev);
+  if (halftime) {
+    let lead = '';
+    if (hs > as) lead = `${bold(hName)}暂以 ${hs}-${as} 领先`;
+    else if (as > hs) lead = `${bold(aName)}以 ${as}-${hs} 暂时领先`;
+    else lead = `双方 ${hs}-${as} 战平`;
+    paras.push(`⏸️ 上半场结束，进入中场休息。${lead}。球员们正在更衣室调整战术，下半场将是决定胜负的关键45分钟。`);
+  } else if (state === 'in') {
     const period = ev?.status?.period;
     const clock  = ev?.status?.displayClock || '';
     const halfLabel = period === 1 ? '上半场' : period === 2 ? '下半场' : period > 2 ? '加时赛' : '';
@@ -1375,6 +1408,9 @@ async function callDeepSeekAI(containerId, info) {
     const time = clock ? `，当前${half}第${clock}` : '';
     sysMsg = `你是2026世界杯足球分析专家。请用中文做一段连贯流畅的分析，严格控制在220字以内。先结合当前比分点评场上形势和双方表现，然后预测下半场/终场走势，最后给出四项盘口预测。盘口格式："【盘口预测】大小球：大x.x | 让球：主让x球/主受让x球 | 胜平负：主胜/平局/客胜 | 比分预测：x:x"。注意大小球必须带"大"或"小"前缀，让球必须指明主让还是主受让。${FORMAT_RULES}`;
     userMsg = `2026世界杯正在进行：${homeName} ${hs}-${as} ${awayName}${time}。请实时点评并给出盘口预测。`;
+  } else if (state === 'halftime') {
+    sysMsg = `你是2026世界杯足球分析专家。请用中文做一段连贯流畅的半场点评，严格控制在240字以内。先对上半场双方表现进行总结，然后预测下半场走势和战术调整方向，最后给出下半场四项盘口预测。盘口格式："【盘口预测】大小球：大x.x | 让球：主让x球/主受让x球 | 胜平负：主胜/平局/客胜 | 比分预测：x:x"。注意大小球必须带"大"或"小"前缀，让球必须指明主让还是主受让。${FORMAT_RULES}`;
+    userMsg = `2026世界杯中场休息：${homeName} ${hs}-${as} ${awayName}。请总结上半场并给出下半场盘口预测。`;
   } else {
     sysMsg = `你是2026世界杯足球分析专家。请用中文做一段连贯流畅的赛后复盘，严格控制在280字以内。内容依次：整体比赛回顾→大小球盘口预测"大x.x"与实际总进球对比及偏差原因→让球盘口预测与实际结果对比及偏差原因→胜平负预测与实际结果对比及偏差原因→比分预测与实际比分对比及关键转折点→总结。注意大小球必须带"大"或"小"前缀，让球必须指明主让还是主受让。${FORMAT_RULES}`;
     userMsg = `2026世界杯已结束：${homeName} ${hs}-${as} ${awayName}。请做赛后复盘，对比大小球/让球/胜平负/比分四项盘口预测与实际结果。`;
